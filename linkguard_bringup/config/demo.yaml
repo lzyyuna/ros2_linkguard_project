@@ -1,0 +1,23 @@
+robot_sim:
+  ros__parameters:
+    update_rate_hz: 20.0
+    command_timeout_sec: 0.5
+    max_linear_speed: 1.0
+
+link_emulator:
+  ros__parameters:
+    latency_ms: 20.0
+    jitter_ms: 5.0
+    drop_rate: 0.0
+    random_seed: 7
+
+mission_server:
+  ros__parameters:
+    control_rate_hz: 10.0
+    feedback_rate_hz: 2.0
+    linear_gain: 0.8
+    angular_gain: 1.8
+    max_linear_speed: 0.8
+    max_angular_speed: 1.5
+    stop_quality_threshold: 0.20
+    bad_link_abort_sec: 2.0

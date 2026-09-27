@@ -1,0 +1,12 @@
+float64 target_x
+float64 target_y
+float64 tolerance
+float64 max_duration_sec
+---
+bool success
+string message
+float64 elapsed_sec
+---
+geometry_msgs/Pose2D current_pose
+float64 distance_remaining
+float32 network_quality

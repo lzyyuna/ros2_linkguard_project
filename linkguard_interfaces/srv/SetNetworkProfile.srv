@@ -1,0 +1,7 @@
+string profile
+float32 latency_ms
+float32 jitter_ms
+float32 drop_rate
+---
+bool success
+string message

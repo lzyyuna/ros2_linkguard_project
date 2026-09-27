@@ -1,0 +1,9 @@
+builtin_interfaces/Time stamp
+float32 latency_ms
+float32 jitter_ms
+float32 drop_rate
+float32 measured_delivery_rate
+uint32 sent_packets
+uint32 delivered_packets
+uint32 dropped_packets
+string profile
