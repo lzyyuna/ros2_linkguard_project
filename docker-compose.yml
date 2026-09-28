@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-    image: linkguard:0.3.0
+    image: linkguard:0.4.0
     hostname: linkguard-control
     environment:
       ROS_DOMAIN_ID: "${ROS_DOMAIN_ID:-42}"
@@ -20,7 +20,7 @@ services:
     restart: "no"
 
   robot:
-    image: linkguard:0.3.0
+    image: linkguard:0.4.0
     hostname: linkguard-robot
     environment:
       ROS_DOMAIN_ID: "${ROS_DOMAIN_ID:-42}"

@@ -4,6 +4,15 @@
 
 “我做了一个网络感知型 ROS 2 机器人任务系统。系统用 Topic 承载连续控制和遥测，用 Service 注入网络场景，用 Parameter 配置策略，用 Action 管理可反馈、可取消的移动任务。我为控制报文加入序号和源时间戳，实现了滑动窗口交付率、延迟、抖动、AoI和乱序检测，再用实测值驱动GOOD、DEGRADED、STOPPED、ABORTED安全状态机。命令QoS可显式切换RELIABLE/BEST_EFFORT，控制端与机器人端也可以在两个容器中跨网络通信。”
 
+## 实验结果表达
+
+“我使用配对随机种子完成了RELIABLE/BEST_EFFORT在good、congested、
+disconnected场景下的60次重复实验。60次全部有效，六个组合的预期
+结果率均为100%。good场景任务约4.5秒，congested约7.5秒且交付率约0.75，
+disconnected约3.35秒安全中止。两种QoS的结果差异很小，说明在单机
+低负载环境中，业务行为主要受应用层网络profile和安全状态机影响，
+不能据此夸大QoS优劣。”
+
 ## 面试官可能追问
 
 ### 为什么网络场景切换不用 Topic？

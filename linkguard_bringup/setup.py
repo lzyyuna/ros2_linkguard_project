@@ -5,7 +5,7 @@ package_name = 'linkguard_bringup'
 
 setup(
     name=package_name,
-    version='0.3.0',
+    version='0.4.0',
     packages=find_packages(exclude=['test']),
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
@@ -26,6 +26,8 @@ setup(
             'mission_server = linkguard_bringup.mission_server:main',
             'mission_client = linkguard_bringup.mission_client:main',
             'network_monitor = linkguard_bringup.network_monitor:main',
+            'qos_experiment = linkguard_bringup.qos_experiment:main',
+            'qos_analyze = linkguard_bringup.qos_analyze:main',
         ],
     },
 )

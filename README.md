@@ -36,7 +36,8 @@ flowchart LR
 - [x] D2.1：控制命令序号与时间戳
 - [x] D2.2：滑动窗口交付率、实测延迟/抖动、AoI 与乱序统计
 - [x] D2.3：实测指标驱动的 GOOD/DEGRADED/STOPPED/ABORTED 状态机
-- [x] D2.4：显式 QoS、控制端/机器人端双容器通信
+- [x] D2.4：显式 QoS 与控制端/机器人端部署定义（双容器运行待具备Docker的环境验收）
+- [x] D2.5：完成60次QoS重复实验、CSV/图表/报告自动化与GitHub CI配置
 - [ ] D3：多机器人调度、故障恢复与生命周期管理
 - [ ] D4：CI、Docker、性能报告、演示视频与作品集页面
 
@@ -139,6 +140,50 @@ ros2 topic echo /network/metrics --once
 D2.4将命令Topic的reliability和depth显式化，并提供双容器部署。详细验收命令见
 [docs/D2_3_D2_4_GUIDE.md](docs/D2_3_D2_4_GUIDE.md)。
 
+## QoS重复对照实验
+
+实验运行器自动完成`RELIABLE/BEST_EFFORT × good/congested/disconnected`，每次试验
+重新启动节点，并为两种QoS使用配对随机种子。不要同时手动启动`demo.launch.py`。
+
+先运行每组1次的冒烟实验：
+
+```bash
+cd ~/linkguard_ws/src/ros2_linkguard_project
+ros2 run linkguard_bringup qos_experiment \
+  --repetitions 1 \
+  --output experiments/results/qos_smoke.csv
+```
+
+正式执行每组10次：
+
+```bash
+ros2 run linkguard_bringup qos_experiment \
+  --repetitions 10 \
+  --output experiments/results/qos_trials.csv
+```
+
+生成汇总CSV、SVG图表和Markdown报告：
+
+```bash
+ros2 run linkguard_bringup qos_analyze \
+  --input experiments/results/qos_trials.csv \
+  --output-dir experiments/results/report
+```
+
+完整实验设计和数据口径见
+[docs/QOS_EXPERIMENT_PROTOCOL.md](docs/QOS_EXPERIMENT_PROTOCOL.md)。
+
+正式实验已完成60次，六个组合均为10/10有效、0次基础设施错误、预期结果率100%。
+在本机低负载条件下，两种reliability没有观察到实质业务差异；任务行为主要由应用层
+网络profile决定。查看[最终项目报告](docs/FINAL_PROJECT_REPORT.md)和
+[QoS实验报告](experiments/results/report/QOS_EXPERIMENT_REPORT.md)。
+
+## 持续集成
+
+`.github/workflows/ci.yml`会在push和Pull Request时使用ROS 2 Jazzy环境执行依赖安装、
+Python语法检查、`colcon build`、`colcon test`和测试结果检查。仓库同时提供Apache-2.0
+许可证、变更日志、贡献指南和Pull Request模板。
+
 ## 第一次演示建议
 
 1. 在 `good` 网络下发送 `(5, 2)` 目标，观察反馈和成功结果。
@@ -152,6 +197,8 @@ D2.4将命令Topic的reliability和depth显式化，并提供双容器部署。�
 ros2_linkguard_project/
 ├── linkguard_interfaces/     # CommandPacket、NetworkMetrics、srv、action
 ├── linkguard_bringup/        # Python 节点、launch、参数和单元测试
+├── experiments/              # 原始CSV、汇总、图表和报告
+├── .github/workflows/        # GitHub Actions持续集成
 ├── docker/                   # 容器镜像入口
 ├── docker-compose.yml        # 控制端与机器人端双容器编排
 └── docs/                     # 架构、交付计划、验收与面试说明
@@ -159,4 +206,4 @@ ros2_linkguard_project/
 
 ## 你应该亲自完成的部分
 
-第一阶段代码已经给你一个正确起点，但作品集的价值来自你能解释和扩展它。建议先不要直接进入多机器人：先画出数据流，逐个运行节点，用 `ros2 topic/service/action/param` 命令验证每条通信链路，并把你观察到的现象写进实验记录。
+作品集的价值不只是能运行，还在于能解释实验设计、指标口径和结论边界。正式报告应保留原始CSV，区分DDS传输缺口与应用层模拟丢包，不要仅用一次截图宣称QoS优劣。

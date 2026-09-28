@@ -43,11 +43,12 @@
 - [x] D2.3：把实测通信指标接入GOOD/DEGRADED/STOPPED/ABORTED状态机；
 - [x] D2.4：显式配置命令QoS，并将控制端和机器人端拆入两个容器；
 - [x] 提供 `BEST_EFFORT` 与 `RELIABLE` 切换入口；
-- [ ] 完成 `BEST_EFFORT` 与 `RELIABLE` 的重复对照实验；
+- [x] 提供 `BEST_EFFORT` 与 `RELIABLE` 的自动重复对照实验与配对随机种子；
+- [x] 自动输出原始CSV、汇总CSV、SVG图表与Markdown报告；
+- [x] 在目标服务器完成正式60次实验，60/60有效且预期结果率100%；
 - 比较不同 depth、deadline、lifespan；
 - 使用 rosbag2 记录位姿、命令和网络指标；
-- 输出 CSV 与 matplotlib 图：完成时间、稳态误差、控制命令新鲜度、投递率；
-- 添加 launch testing 或 pytest 集成测试。
+- [x] 添加纯Python策略、指标、序号缺口和报告生成测试；
 
 D2.3-D2.4阶段验收：good网络为GOOD且全速；congested网络进入DEGRADED并降速；
 disconnected网络进入STOPPED并在保护时间后ABORTED；两个容器能够发现彼此并完成
@@ -80,12 +81,13 @@ D2完整验收：至少完成 3 × 3 组参数实验，每组重复 10 次，报
 
 新增内容：
 
-- GitHub Actions：lint、单测、构建；
+- [x] GitHub Actions：语法检查、依赖安装、构建与单测；
 - Docker/Dev Container；
 - 架构决策记录（ADR）；
 - 2 分钟演示视频与 6 页技术汇报；
 - 性能报告、已知限制、后续路线；
-- Issue、里程碑、规范化 commit 和 release tag。
+- [x] 许可证、贡献指南、PR模板和变更日志；
+- [ ] Issue、里程碑、规范化release tag；
 
 验收：陌生人在一台干净的 Ubuntu 主机上，按 README 能在 15 分钟内复现 Demo。
 

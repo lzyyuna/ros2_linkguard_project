@@ -34,7 +34,8 @@ class NetworkMonitor(Node):
             f'reordered={message.out_of_order_packets}, '
             f'window={message.window_sample_count}) '
             f'packets={message.delivered_packets}/{message.sent_packets} '
-            f'dropped={message.dropped_packets}'
+            f'app_dropped={message.dropped_packets} '
+            f'transport_dropped={message.transport_dropped_packets}'
         )
 
     def _on_communication_state(self, message: CommunicationState) -> None:

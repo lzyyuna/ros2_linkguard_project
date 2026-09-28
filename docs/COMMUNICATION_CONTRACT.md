@@ -78,7 +78,13 @@ Parameter 表示节点配置，Service 表示明确的业务操作。“切换�
 - `measured_delivery_rate`：窗口内已投递数量除以已完成结果数量；
 - `age_of_information_ms`：当前时间减去最新已投递报文的源时间戳；
 - `out_of_order_packets`：序号不大于历史最高已投递序号的累计次数；
+- `transport_dropped_packets`：通过mission_server到link_emulator之间的序号缺口推断的DDS入口丢失；
+- `dropped_packets`：link_emulator按应用层`drop_rate`主动丢弃的数量；
 - `window_sample_count`：当前窗口内已完成结果的数量。
+
+当link_emulator发现`/cmd_vel_raw`序号跳跃时，会把缺失序号作为传输丢失加入交付率
+窗口。这样QoS实验不会只统计已经到达模拟器的报文。该推断假设单一发布者的序号
+严格递增；重复或倒退的原始命令会被拒绝，避免旧控制覆盖新控制。
 
 ## D2.3状态策略
 

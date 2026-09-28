@@ -9,6 +9,7 @@ float32 age_of_information_ms
 uint32 sent_packets
 uint32 delivered_packets
 uint32 dropped_packets
+uint32 transport_dropped_packets
 uint32 out_of_order_packets
 uint32 window_sample_count
 string profile

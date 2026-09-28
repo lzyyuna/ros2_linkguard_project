@@ -11,6 +11,7 @@ from linkguard_interfaces.srv import SetNetworkProfile
 from .delivery_metrics import SlidingWindowDeliveryMetrics
 from .link_model import LinkConfig, LinkModel, PROFILES
 from .qos_profiles import command_qos, reliable_qos
+from .sequence_tracker import SequenceGapTracker
 
 
 @dataclass
@@ -37,6 +38,7 @@ class LinkEmulator(Node):
         self._sent = 0
         self._delivered = 0
         self._dropped = 0
+        self._sequence_tracker = SequenceGapTracker()
         self._delivery_metrics = SlidingWindowDeliveryMetrics(
             int(self.get_parameter('metrics_window_size').value)
         )
@@ -136,7 +138,17 @@ class LinkEmulator(Node):
         return response
 
     def _on_command(self, message: CommandPacket) -> None:
-        self._sent += 1
+        observation = self._sequence_tracker.observe(int(message.sequence))
+        if observation.source_restarted:
+            self.get_logger().info('detected a new command sequence epoch')
+        if not observation.accepted:
+            self.get_logger().warning(
+                f'ignoring duplicate or out-of-order raw command sequence={message.sequence}'
+            )
+            return
+        for missing_sequence in observation.missing_sequences:
+            self._delivery_metrics.record_drop(missing_sequence)
+        self._sent += len(observation.missing_sequences) + 1
         if self._model.should_drop():
             self._dropped += 1
             self._delivery_metrics.record_drop(int(message.sequence))
@@ -198,6 +210,9 @@ class LinkEmulator(Node):
         message.sent_packets = self._sent
         message.delivered_packets = self._delivered
         message.dropped_packets = self._dropped
+        message.transport_dropped_packets = (
+            self._sequence_tracker.transport_dropped_packets
+        )
         message.out_of_order_packets = measured.out_of_order_packets
         message.window_sample_count = measured.window_sample_count
         message.profile = self._profile
