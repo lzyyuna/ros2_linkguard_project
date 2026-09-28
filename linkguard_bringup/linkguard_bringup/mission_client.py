@@ -20,7 +20,9 @@ class MissionClient(Node):
         print(
             f'pose=({pose.x:.2f}, {pose.y:.2f}, {pose.theta:.2f}) '
             f'remaining={feedback.distance_remaining:.2f} m '
-            f'network_quality={feedback.network_quality:.2f}'
+            f'network_quality={feedback.network_quality:.2f} '
+            f'communication={feedback.communication_state} '
+            f'speed_scale={feedback.speed_scale:.2f}'
         )
 
     def run(self, x: float, y: float, tolerance: float, timeout: float,

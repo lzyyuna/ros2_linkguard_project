@@ -6,7 +6,7 @@ LinkGuard 是一个面向“通信 × 机器人”方向的作品集项目。它
 
 | 机制 | 项目中的职责 | 为什么适合 |
 |---|---|---|
-| Topic | 位姿、速度指令、网络指标的连续数据流 | 高频、异步、多消费者 |
+| Topic | 带序号和时间戳的速度指令、位姿、网络指标 | 高频、异步、多消费者 |
 | Service | 切换网络配置（良好/拥塞/断连/自定义） | 一次请求、一次响应 |
 | Parameter | 节点启动配置与运行期调参 | 低频配置，不承担业务数据 |
 | Action | 执行一个有时长、可反馈、可取消的移动任务 | 长任务，需要反馈和取消 |
@@ -18,9 +18,11 @@ flowchart LR
     CLI[任务客户端] -->|ExecuteMission Action| MS[mission_server]
     MS -->|/cmd_vel_raw Topic| LE[link_emulator]
     LE -->|延迟/抖动/丢包| RS[robot_sim]
+    RS -->|/cmd_vel_receipt Topic| LE
     RS -->|/robot/pose Topic| MS
     LE -->|/network/metrics Topic| MS
     LE -->|/network/metrics Topic| NM[network_monitor]
+    MS -->|/communication/state Topic| NM
     OP[运维端] -->|SetNetworkProfile Service| LE
     CFG[参数 YAML] -.-> MS
     CFG -.-> LE
@@ -31,7 +33,10 @@ flowchart LR
 
 - [x] D0：需求、架构、通信契约、验收标准
 - [x] D1：单机器人通信闭环 MVP
-- [ ] D2：QoS 对照实验与 rosbag2 数据采集
+- [x] D2.1：控制命令序号与时间戳
+- [x] D2.2：滑动窗口交付率、实测延迟/抖动、AoI 与乱序统计
+- [x] D2.3：实测指标驱动的 GOOD/DEGRADED/STOPPED/ABORTED 状态机
+- [x] D2.4：显式 QoS、控制端/机器人端双容器通信
 - [ ] D3：多机器人调度、故障恢复与生命周期管理
 - [ ] D4：CI、Docker、性能报告、演示视频与作品集页面
 
@@ -101,13 +106,38 @@ ros2 service call /set_network_profile linkguard_interfaces/srv/SetNetworkProfil
   "{profile: custom, latency_ms: 180.0, jitter_ms: 40.0, drop_rate: 0.25}"
 ```
 
-运行时参数调整示例：
+运行时策略参数调整示例：
 
 ```bash
-ros2 param set /mission_server stop_quality_threshold 0.35
+ros2 param set /mission_server degraded_delivery_rate 0.80
+ros2 param set /mission_server degraded_speed_scale 0.40
 ros2 param get /link_emulator drop_rate
 ros2 topic echo /network/metrics
+ros2 topic echo /communication/state
 ```
+
+查看D2控制报文和实测通信指标：
+
+```bash
+ros2 interface show linkguard_interfaces/msg/CommandPacket
+ros2 interface show linkguard_interfaces/msg/CommandReceipt
+ros2 topic echo /cmd_vel_raw --once
+ros2 topic echo /cmd_vel --once
+ros2 topic echo /cmd_vel_receipt --once
+ros2 topic echo /network/metrics --once
+```
+
+`CommandPacket`中的`sequence`用于发现乱序，`stamp`用于测量实际延迟；机器人
+实际收到命令后通过`CommandReceipt`返回序号和接收时间。
+`/network/metrics`同时保留配置值，并发布最近50个已完成投递结果的交付率、
+实际延迟、实际抖动、AoI和乱序数量。仍在延迟队列中的命令不会被提前算作丢包。
+
+从D2.3开始，任务服务器不再根据配置的`drop_rate`直接判断安全状态，而是根据
+上述实测指标进入`GOOD`、`DEGRADED`、`STOPPED`或`ABORTED`。拥塞时降低线速度，
+危险链路下先停车，持续超过保护时限后再中止Action。
+
+D2.4将命令Topic的reliability和depth显式化，并提供双容器部署。详细验收命令见
+[docs/D2_3_D2_4_GUIDE.md](docs/D2_3_D2_4_GUIDE.md)。
 
 ## 第一次演示建议
 
@@ -120,8 +150,10 @@ ros2 topic echo /network/metrics
 
 ```text
 ros2_linkguard_project/
-├── linkguard_interfaces/     # 自定义 msg / srv / action
+├── linkguard_interfaces/     # CommandPacket、NetworkMetrics、srv、action
 ├── linkguard_bringup/        # Python 节点、launch、参数和单元测试
+├── docker/                   # 容器镜像入口
+├── docker-compose.yml        # 控制端与机器人端双容器编排
 └── docs/                     # 架构、交付计划、验收与面试说明
 ```
 

@@ -1,4 +1,5 @@
 import math
+from dataclasses import dataclass
 import threading
 import time
 
@@ -11,7 +12,34 @@ from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 
 from linkguard_interfaces.action import ExecuteMission
-from linkguard_interfaces.msg import NetworkMetrics
+from linkguard_interfaces.msg import (
+    CommandPacket,
+    CommunicationState as CommunicationStateMsg,
+    NetworkMetrics,
+)
+
+from .communication_policy import (
+    LinkHealth,
+    LinkState,
+    PolicyConfig,
+    PolicyDecision,
+    evaluate_link_health,
+)
+from .qos_profiles import command_qos, reliable_qos, state_qos, telemetry_qos
+
+
+@dataclass(frozen=True)
+class MissionSnapshot:
+    handle: object
+    started_at: float
+    stopped_since: object
+    x: float
+    y: float
+    theta: float
+    health: LinkHealth
+    last_metrics_at: object
+    communication_state: LinkState
+    speed_scale: float
 
 
 class MissionServer(Node):
@@ -25,23 +53,63 @@ class MissionServer(Node):
         self.declare_parameter('angular_gain', 1.8)
         self.declare_parameter('max_linear_speed', 0.8)
         self.declare_parameter('max_angular_speed', 1.5)
-        self.declare_parameter('stop_quality_threshold', 0.20)
         self.declare_parameter('bad_link_abort_sec', 2.0)
+        self.declare_parameter('degraded_delivery_rate', 0.85)
+        self.declare_parameter('stopped_delivery_rate', 0.40)
+        self.declare_parameter('degraded_latency_ms', 150.0)
+        self.declare_parameter('stopped_latency_ms', 500.0)
+        self.declare_parameter('degraded_jitter_ms', 50.0)
+        self.declare_parameter('stopped_aoi_ms', 750.0)
+        self.declare_parameter('degraded_speed_scale', 0.50)
+        self.declare_parameter('metrics_min_samples', 10)
+        self.declare_parameter('metrics_warmup_sec', 1.0)
+        self.declare_parameter('metrics_timeout_sec', 1.5)
+        self.declare_parameter('command_qos_reliability', 'reliable')
+        self.declare_parameter('command_qos_depth', 10)
         self.add_on_set_parameters_callback(self._validate_parameters)
 
         self._state_lock = threading.Lock()
         self._pose = Pose2D()
-        self._network_quality = 1.0
+        self._link_health = LinkHealth()
+        self._last_metrics_at = None
+        self._communication_state = LinkState.GOOD
+        self._communication_reason = 'waiting for mission'
+        self._communication_speed_scale = 1.0
         self._goal_reserved = False
         self._active_goal_handle = None
         self._started_at = 0.0
-        self._bad_link_since = None
+        self._stopped_since = None
         self._mission_done = None
         self._mission_result = None
 
-        self._command_pub = self.create_publisher(Twist, '/cmd_vel_raw', 10)
-        self.create_subscription(Pose2D, '/robot/pose', self._on_pose, 10)
-        self.create_subscription(NetworkMetrics, '/network/metrics', self._on_metrics, 10)
+        self._sequence_lock = threading.Lock()
+        self._next_command_sequence = 0
+        command_profile = command_qos(
+            str(self.get_parameter('command_qos_reliability').value),
+            int(self.get_parameter('command_qos_depth').value),
+        )
+        self._command_pub = self.create_publisher(
+            CommandPacket,
+            '/cmd_vel_raw',
+            command_profile,
+        )
+        self._communication_state_pub = self.create_publisher(
+            CommunicationStateMsg,
+            '/communication/state',
+            state_qos(),
+        )
+        self.create_subscription(
+            Pose2D,
+            '/robot/pose',
+            self._on_pose,
+            telemetry_qos(),
+        )
+        self.create_subscription(
+            NetworkMetrics,
+            '/network/metrics',
+            self._on_metrics,
+            reliable_qos(),
+        )
 
         # Keep the custom group alive for the entire node lifetime.
         self._action_group = ReentrantCallbackGroup()
@@ -79,20 +147,106 @@ class MissionServer(Node):
         }
         for parameter in parameters:
             if parameter.name in positive and float(parameter.value) <= 0.0:
-                return SetParametersResult(successful=False, reason=f'{parameter.name} must be positive')
-            if parameter.name == 'stop_quality_threshold' and not 0.0 <= float(parameter.value) <= 1.0:
-                return SetParametersResult(successful=False, reason='stop_quality_threshold must be in [0, 1]')
+                return SetParametersResult(
+                    successful=False,
+                    reason=f'{parameter.name} must be positive',
+                )
+            if parameter.name in ('command_qos_reliability', 'command_qos_depth'):
+                return SetParametersResult(
+                    successful=False,
+                    reason=f'{parameter.name} requires a node restart',
+                )
+
+        policy_values = {
+            'degraded_delivery_rate': float(
+                self.get_parameter('degraded_delivery_rate').value
+            ),
+            'stopped_delivery_rate': float(
+                self.get_parameter('stopped_delivery_rate').value
+            ),
+            'degraded_latency_ms': float(
+                self.get_parameter('degraded_latency_ms').value
+            ),
+            'stopped_latency_ms': float(
+                self.get_parameter('stopped_latency_ms').value
+            ),
+            'degraded_jitter_ms': float(
+                self.get_parameter('degraded_jitter_ms').value
+            ),
+            'stopped_aoi_ms': float(self.get_parameter('stopped_aoi_ms').value),
+            'degraded_speed_scale': float(
+                self.get_parameter('degraded_speed_scale').value
+            ),
+            'metrics_min_samples': int(
+                self.get_parameter('metrics_min_samples').value
+            ),
+            'metrics_warmup_sec': float(
+                self.get_parameter('metrics_warmup_sec').value
+            ),
+            'metrics_timeout_sec': float(
+                self.get_parameter('metrics_timeout_sec').value
+            ),
+        }
+        for parameter in parameters:
+            if parameter.name not in policy_values:
+                continue
+            if parameter.name == 'metrics_min_samples':
+                policy_values[parameter.name] = int(parameter.value)
+            else:
+                policy_values[parameter.name] = float(parameter.value)
+        try:
+            PolicyConfig(**policy_values).validate()
+        except (TypeError, ValueError) as error:
+            return SetParametersResult(successful=False, reason=str(error))
         return SetParametersResult(successful=True)
+
+    def _policy_config(self) -> PolicyConfig:
+        return PolicyConfig(
+            degraded_delivery_rate=float(
+                self.get_parameter('degraded_delivery_rate').value
+            ),
+            stopped_delivery_rate=float(
+                self.get_parameter('stopped_delivery_rate').value
+            ),
+            degraded_latency_ms=float(
+                self.get_parameter('degraded_latency_ms').value
+            ),
+            stopped_latency_ms=float(
+                self.get_parameter('stopped_latency_ms').value
+            ),
+            degraded_jitter_ms=float(
+                self.get_parameter('degraded_jitter_ms').value
+            ),
+            stopped_aoi_ms=float(self.get_parameter('stopped_aoi_ms').value),
+            degraded_speed_scale=float(
+                self.get_parameter('degraded_speed_scale').value
+            ),
+            metrics_min_samples=int(
+                self.get_parameter('metrics_min_samples').value
+            ),
+            metrics_warmup_sec=float(
+                self.get_parameter('metrics_warmup_sec').value
+            ),
+            metrics_timeout_sec=float(
+                self.get_parameter('metrics_timeout_sec').value
+            ),
+        )
 
     def _on_pose(self, message: Pose2D) -> None:
         with self._state_lock:
             self._pose = message
 
     def _on_metrics(self, message: NetworkMetrics) -> None:
-        # D1 uses configured loss for immediate and stable safety decisions.
-        # D2 will replace this with a sliding-window delivery/AoI estimator.
+        health = LinkHealth(
+            delivery_rate=max(0.0, min(1.0, float(message.measured_delivery_rate))),
+            latency_ms=max(0.0, float(message.measured_latency_ms)),
+            jitter_ms=max(0.0, float(message.measured_jitter_ms)),
+            age_of_information_ms=max(0.0, float(message.age_of_information_ms)),
+            window_sample_count=int(message.window_sample_count),
+        )
         with self._state_lock:
-            self._network_quality = max(0.0, min(1.0, 1.0 - float(message.drop_rate)))
+            self._link_health = health
+            self._last_metrics_at = time.monotonic()
 
     def _on_goal(self, goal_request):
         if goal_request.tolerance <= 0.0 or goal_request.max_duration_sec <= 0.0:
@@ -110,7 +264,16 @@ class MissionServer(Node):
         return CancelResponse.ACCEPT
 
     def _stop(self) -> None:
-        self._command_pub.publish(Twist())
+        self._publish_command(Twist())
+
+    def _publish_command(self, command: Twist) -> None:
+        packet = CommandPacket()
+        packet.stamp = self.get_clock().now().to_msg()
+        with self._sequence_lock:
+            packet.sequence = self._next_command_sequence
+            self._next_command_sequence += 1
+        packet.command = command
+        self._command_pub.publish(packet)
 
     async def _execute(self, goal_handle):
         # Use an executor-owned Future so awaiting the Action result yields the
@@ -120,9 +283,16 @@ class MissionServer(Node):
         with self._state_lock:
             self._active_goal_handle = goal_handle
             self._started_at = time.monotonic()
-            self._bad_link_since = None
+            self._stopped_since = None
             self._mission_done = done
             self._mission_result = None
+            health = self._link_health
+
+        self._apply_policy_decision(
+            PolicyDecision(LinkState.GOOD, 1.0, 'collecting fresh mission samples'),
+            health,
+            force=True,
+        )
 
         result = await done
 
@@ -139,15 +309,48 @@ class MissionServer(Node):
             handle = self._active_goal_handle
             if handle is None:
                 return None
-            return (
-                handle,
-                self._started_at,
-                self._bad_link_since,
-                float(self._pose.x),
-                float(self._pose.y),
-                float(self._pose.theta),
-                self._network_quality,
+            return MissionSnapshot(
+                handle=handle,
+                started_at=self._started_at,
+                stopped_since=self._stopped_since,
+                x=float(self._pose.x),
+                y=float(self._pose.y),
+                theta=float(self._pose.theta),
+                health=self._link_health,
+                last_metrics_at=self._last_metrics_at,
+                communication_state=self._communication_state,
+                speed_scale=self._communication_speed_scale,
             )
+
+    def _apply_policy_decision(
+        self,
+        decision: PolicyDecision,
+        health: LinkHealth,
+        force: bool = False,
+    ) -> None:
+        with self._state_lock:
+            changed = decision.state != self._communication_state
+            self._communication_state = decision.state
+            self._communication_reason = decision.reason
+            self._communication_speed_scale = decision.speed_scale
+        if not changed and not force:
+            return
+
+        message = CommunicationStateMsg()
+        message.stamp = self.get_clock().now().to_msg()
+        message.state = decision.state.value
+        message.reason = decision.reason
+        message.speed_scale = decision.speed_scale
+        message.measured_delivery_rate = health.delivery_rate
+        message.measured_latency_ms = health.latency_ms
+        message.measured_jitter_ms = health.jitter_ms
+        message.age_of_information_ms = health.age_of_information_ms
+        message.window_sample_count = health.window_sample_count
+        self._communication_state_pub.publish(message)
+        self.get_logger().info(
+            f'communication state={decision.state.value} '
+            f'speed_scale={decision.speed_scale:.2f} reason="{decision.reason}"'
+        )
 
     def _finish(self, handle, state: str, success: bool, message: str, elapsed: float) -> None:
         result = ExecuteMission.Result()
@@ -189,11 +392,11 @@ class MissionServer(Node):
             self._workers_stop.wait(delay)
 
     def _control_step(self, snapshot, now: float) -> None:
-        handle, started_at, bad_link_since, x, y, theta, quality = snapshot
-        elapsed = now - started_at
+        handle = snapshot.handle
+        elapsed = now - snapshot.started_at
         goal = handle.request
-        dx = goal.target_x - x
-        dy = goal.target_y - y
+        dx = goal.target_x - snapshot.x
+        dy = goal.target_y - snapshot.y
         distance = math.hypot(dx, dy)
 
         if handle.is_cancel_requested:
@@ -206,44 +409,66 @@ class MissionServer(Node):
             self._finish(handle, 'succeeded', True, 'target reached', elapsed)
             return
 
-        threshold = float(self.get_parameter('stop_quality_threshold').value)
-        if quality < threshold:
-            if bad_link_since is None:
-                bad_link_since = now
+        metrics_age_sec = (
+            None
+            if snapshot.last_metrics_at is None
+            else max(0.0, now - snapshot.last_metrics_at)
+        )
+        decision = evaluate_link_health(
+            snapshot.health,
+            self._policy_config(),
+            elapsed,
+            metrics_age_sec,
+        )
+        self._apply_policy_decision(decision, snapshot.health)
+
+        if decision.state == LinkState.STOPPED:
+            stopped_since = snapshot.stopped_since
+            if stopped_since is None:
+                stopped_since = now
                 with self._state_lock:
                     if self._active_goal_handle is handle:
-                        self._bad_link_since = bad_link_since
+                        self._stopped_since = stopped_since
             self._stop()
-            if now - bad_link_since >= float(self.get_parameter('bad_link_abort_sec').value):
+            if now - stopped_since >= float(
+                self.get_parameter('bad_link_abort_sec').value
+            ):
+                aborted = PolicyDecision(
+                    LinkState.ABORTED,
+                    0.0,
+                    f'communication remained stopped: {decision.reason}',
+                )
+                self._apply_policy_decision(aborted, snapshot.health, force=True)
                 self._finish(
                     handle,
                     'aborted',
                     False,
-                    'aborted: network quality remained below safety threshold',
+                    f'aborted: {aborted.reason}',
                     elapsed,
                 )
             return
 
-        if bad_link_since is not None:
+        if snapshot.stopped_since is not None:
             with self._state_lock:
                 if self._active_goal_handle is handle:
-                    self._bad_link_since = None
+                    self._stopped_since = None
 
         desired_heading = math.atan2(dy, dx)
         heading_error = math.atan2(
-            math.sin(desired_heading - theta),
-            math.cos(desired_heading - theta),
+            math.sin(desired_heading - snapshot.theta),
+            math.cos(desired_heading - snapshot.theta),
         )
         command = Twist()
         max_linear = float(self.get_parameter('max_linear_speed').value)
         max_angular = float(self.get_parameter('max_angular_speed').value)
         command.linear.x = min(max_linear, float(self.get_parameter('linear_gain').value) * distance)
         command.linear.x *= max(0.0, math.cos(heading_error))
+        command.linear.x *= decision.speed_scale
         command.angular.z = max(
             -max_angular,
             min(max_angular, float(self.get_parameter('angular_gain').value) * heading_error),
         )
-        self._command_pub.publish(command)
+        self._publish_command(command)
 
     def _feedback_loop(self) -> None:
         next_tick = time.monotonic()
@@ -262,29 +487,33 @@ class MissionServer(Node):
 
     @staticmethod
     def _feedback_step(snapshot) -> None:
-        handle, _, _, x, y, theta, quality = snapshot
+        handle = snapshot.handle
         if not handle.is_active:
             return
         goal = handle.request
 
         feedback = ExecuteMission.Feedback()
-        feedback.current_pose.x = x
-        feedback.current_pose.y = y
-        feedback.current_pose.theta = theta
-        feedback.distance_remaining = math.hypot(goal.target_x - x, goal.target_y - y)
-        feedback.network_quality = quality
+        feedback.current_pose.x = snapshot.x
+        feedback.current_pose.y = snapshot.y
+        feedback.current_pose.theta = snapshot.theta
+        feedback.distance_remaining = math.hypot(
+            goal.target_x - snapshot.x,
+            goal.target_y - snapshot.y,
+        )
+        feedback.network_quality = snapshot.health.delivery_rate
+        feedback.communication_state = snapshot.communication_state.value
+        feedback.speed_scale = snapshot.speed_scale
         handle.publish_feedback(feedback)
 
     def prepare_shutdown(self) -> None:
         snapshot = self._snapshot()
         if snapshot is not None:
-            handle, started_at, _, _, _, _, _ = snapshot
             self._finish(
-                handle,
+                snapshot.handle,
                 'aborted',
                 False,
                 'mission server stopped',
-                time.monotonic() - started_at,
+                time.monotonic() - snapshot.started_at,
             )
         self._workers_stop.set()
         self._control_thread.join(timeout=1.0)

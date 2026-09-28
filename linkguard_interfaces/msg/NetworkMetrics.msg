@@ -3,7 +3,12 @@ float32 latency_ms
 float32 jitter_ms
 float32 drop_rate
 float32 measured_delivery_rate
+float32 measured_latency_ms
+float32 measured_jitter_ms
+float32 age_of_information_ms
 uint32 sent_packets
 uint32 delivered_packets
 uint32 dropped_packets
+uint32 out_of_order_packets
+uint32 window_sample_count
 string profile

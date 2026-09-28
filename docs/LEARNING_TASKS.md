@@ -13,7 +13,7 @@
 ## Day 2：只运行 Topic 链路
 
 - 单独运行 `robot_sim`；
-- 用 CLI 向 `/cmd_vel` 发布 `Twist`；
+- 用 CLI 向 `/cmd_vel` 发布带`Twist`的`CommandPacket`；
 - echo `/robot/pose`；
 - 改发布频率，观察看门狗停车。
 
@@ -75,5 +75,5 @@
 2. Service 为什么不能替代 Action？
 3. Parameter 变更失败时，旧值是否仍然有效？
 4. 如果 Action server 崩溃，机器人为什么仍能停下？
-5. 当前 delivery rate 为什么可能滞后？如何改进？
+5. 为什么等待队列中的报文不能立刻算作丢失？滑动窗口如何改进累计投递率？
 6. DDS QoS 尚未显式配置时使用什么默认行为？这会带来什么风险？

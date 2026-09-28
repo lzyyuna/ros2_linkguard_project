@@ -1,0 +1,43 @@
+services:
+  control:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: linkguard:0.3.0
+    hostname: linkguard-control
+    environment:
+      ROS_DOMAIN_ID: "${ROS_DOMAIN_ID:-42}"
+      ROS_LOCALHOST_ONLY: "0"
+      COMMAND_QOS_RELIABILITY: "${COMMAND_QOS_RELIABILITY:-reliable}"
+    command:
+      - bash
+      - -lc
+      - >-
+        ros2 launch linkguard_bringup control.launch.py
+        command_qos_reliability:=$${COMMAND_QOS_RELIABILITY}
+    networks:
+      - linkguard_net
+    restart: "no"
+
+  robot:
+    image: linkguard:0.3.0
+    hostname: linkguard-robot
+    environment:
+      ROS_DOMAIN_ID: "${ROS_DOMAIN_ID:-42}"
+      ROS_LOCALHOST_ONLY: "0"
+      COMMAND_QOS_RELIABILITY: "${COMMAND_QOS_RELIABILITY:-reliable}"
+    command:
+      - bash
+      - -lc
+      - >-
+        ros2 launch linkguard_bringup robot.launch.py
+        command_qos_reliability:=$${COMMAND_QOS_RELIABILITY}
+    networks:
+      - linkguard_net
+    depends_on:
+      - control
+    restart: "no"
+
+networks:
+  linkguard_net:
+    driver: bridge

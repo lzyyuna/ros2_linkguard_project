@@ -3,6 +3,8 @@ robot_sim:
     update_rate_hz: 20.0
     command_timeout_sec: 0.5
     max_linear_speed: 1.0
+    command_qos_reliability: reliable
+    command_qos_depth: 10
 
 link_emulator:
   ros__parameters:
@@ -10,6 +12,9 @@ link_emulator:
     jitter_ms: 5.0
     drop_rate: 0.0
     random_seed: 7
+    metrics_window_size: 50
+    command_qos_reliability: reliable
+    command_qos_depth: 10
 
 mission_server:
   ros__parameters:
@@ -19,5 +24,16 @@ mission_server:
     angular_gain: 1.8
     max_linear_speed: 0.8
     max_angular_speed: 1.5
-    stop_quality_threshold: 0.20
     bad_link_abort_sec: 2.0
+    degraded_delivery_rate: 0.85
+    stopped_delivery_rate: 0.40
+    degraded_latency_ms: 150.0
+    stopped_latency_ms: 500.0
+    degraded_jitter_ms: 50.0
+    stopped_aoi_ms: 750.0
+    degraded_speed_scale: 0.50
+    metrics_min_samples: 10
+    metrics_warmup_sec: 1.0
+    metrics_timeout_sec: 1.5
+    command_qos_reliability: reliable
+    command_qos_depth: 10

@@ -32,19 +32,28 @@
 
 学习重点：Topic、Service、Parameter、Action 的职责边界和协作关系。
 
-## D2：QoS 与可观测性实验
+## D2：可观测性、QoS与分布式实验
 
 周期建议：10 天。
 
 新增内容：
 
-- 比较 `BEST_EFFORT` 与 `RELIABLE`；
+- [x] D2.1：用`CommandPacket`为控制命令增加序号和发送时间戳；
+- [x] D2.2：实现滑动窗口交付率、实测延迟/抖动、AoI和乱序统计；
+- [x] D2.3：把实测通信指标接入GOOD/DEGRADED/STOPPED/ABORTED状态机；
+- [x] D2.4：显式配置命令QoS，并将控制端和机器人端拆入两个容器；
+- [x] 提供 `BEST_EFFORT` 与 `RELIABLE` 切换入口；
+- [ ] 完成 `BEST_EFFORT` 与 `RELIABLE` 的重复对照实验；
 - 比较不同 depth、deadline、lifespan；
 - 使用 rosbag2 记录位姿、命令和网络指标；
 - 输出 CSV 与 matplotlib 图：完成时间、稳态误差、控制命令新鲜度、投递率；
 - 添加 launch testing 或 pytest 集成测试。
 
-验收：至少完成 3 × 3 组参数实验，每组重复 10 次，报告均值、标准差与结论。不能只截图，要有原始数据和可复现脚本。
+D2.3-D2.4阶段验收：good网络为GOOD且全速；congested网络进入DEGRADED并降速；
+disconnected网络进入STOPPED并在保护时间后ABORTED；两个容器能够发现彼此并完成
+Topic、Service和Action闭环。
+
+D2完整验收：至少完成 3 × 3 组参数实验，每组重复 10 次，报告均值、标准差与结论。不能只截图，要有原始数据和可复现脚本。
 
 面试亮点：能解释 DDS QoS 如何影响业务，而不是背 QoS 名称。
 

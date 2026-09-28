@@ -1,0 +1,9 @@
+builtin_interfaces/Time stamp
+string state
+string reason
+float32 speed_scale
+float32 measured_delivery_rate
+float32 measured_latency_ms
+float32 measured_jitter_ms
+float32 age_of_information_ms
+uint32 window_sample_count
