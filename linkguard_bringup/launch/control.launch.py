@@ -42,6 +42,6 @@ def generate_launch_description():
         Node(
             package='linkguard_bringup',
             executable='network_monitor',
-            output='screen',
+            output='log',
         ),
     ])

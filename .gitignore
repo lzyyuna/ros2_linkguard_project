@@ -1,16 +1,6 @@
 build/
 install/
 log/
-
 __pycache__/
-*.pyc
-*.pyo
-*.egg-info/
-
 .pytest_cache/
-.vscode/
-.idea/
-
-core.*
-
-experiments/results/logs/
+*.pyc

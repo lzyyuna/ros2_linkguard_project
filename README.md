@@ -1,209 +1,281 @@
-# LinkGuard：网络感知型 ROS 2 机器人任务系统
+# LinkGuard：面向弱网环境的 ROS 2 机器人任务系统
 
-LinkGuard 是一个面向“通信 × 机器人”方向的作品集项目。它模拟机器人通过存在时延、抖动和丢包的链路接收速度指令，并让任务执行器根据实时链路质量完成、取消或中止导航任务。
+LinkGuard 是一个跨 Windows 与 Linux 的机器人通信项目。Windows 上位机负责下发任务和显示二维运动轨迹，Linux 端运行 ROS 2 机器人仿真；系统根据交付率、延迟、抖动和信息年龄判断通信状态，并在网络恶化时降速，在持续断网时安全停止任务。
 
-这个项目刻意让 ROS 2 的四种核心通信机制各司其职：
+项目重点不是实现复杂的路径规划，而是回答一个工程问题：**当机器人依赖网络执行远程任务时，通信变差后系统应该怎样继续运行或安全退出？**
 
-| 机制 | 项目中的职责 | 为什么适合 |
+## 演示效果
+
+### Windows图形上位机
+
+![LinkGuard Windows图形上位机](docs/images/linkguard_upper_computer_demo.png)
+
+上位机通过TCP连接Linux机器人端，可下发目标位置、停止或查询任务，并切换正常、拥塞和中断三种网络档位。界面左侧实时绘制机器人当前位置、目标点和二维运行轨迹，右侧保留关键命令、网络切换和任务结果，便于观察弱网状态下的降速与安全中止过程。
+
+| 网络状态 | 系统行为 | 实验结果 |
 |---|---|---|
-| Topic | 带序号和时间戳的速度指令、位姿、网络指标 | 高频、异步、多消费者 |
-| Service | 切换网络配置（良好/拥塞/断连/自定义） | 一次请求、一次响应 |
-| Parameter | 节点启动配置与运行期调参 | 低频配置，不承担业务数据 |
-| Action | 执行一个有时长、可反馈、可取消的移动任务 | 长任务，需要反馈和取消 |
+| 良好（good） | 机器人全速执行任务 | 20/20 次成功，中位耗时 4.55 秒 |
+| 拥塞（congested） | 根据通信状态降速，继续完成任务 | 20/20 次成功，中位耗时 7.55 秒 |
+| 中断（disconnected） | 停车并在保护窗口后中止任务 | 20/20 次按预期中止，STOPPED平均持续 2.03 秒 |
+
+拥塞使任务耗时中位数增加约 66%，体现了安全性和执行效率之间的权衡。当前实验未观察到 Reliable 与 Best Effort 之间具有工程意义的差异，原因和实验边界见[实验结论](#实验结论与边界)。
+
+![不同网络状态下的任务耗时](docs/images/mission_duration.svg)
+
+![网络质量对比](docs/images/network_quality.svg)
+
+![QoS配对差值](docs/images/qos_paired_difference.svg)
 
 ## 系统架构
 
 ```mermaid
 flowchart LR
-    CLI[任务客户端] -->|ExecuteMission Action| MS[mission_server]
-    MS -->|/cmd_vel_raw Topic| LE[link_emulator]
-    LE -->|延迟/抖动/丢包| RS[robot_sim]
-    RS -->|/cmd_vel_receipt Topic| LE
-    RS -->|/robot/pose Topic| MS
-    LE -->|/network/metrics Topic| MS
-    LE -->|/network/metrics Topic| NM[network_monitor]
-    MS -->|/communication/state Topic| NM
-    OP[运维端] -->|SetNetworkProfile Service| LE
-    CFG[参数 YAML] -.-> MS
-    CFG -.-> LE
-    CFG -.-> RS
+    GUI[Windows C++ 上位机<br/>任务控制与二维轨迹] <-->|长度前缀 TCP| BR[Linux C++ TCP/ROS 2 Bridge]
+    BR <-->|ExecuteMission Action| MS[Mission Server]
+    MS -->|/cmd_vel_raw| LE[Link Emulator]
+    LE -->|时延 / 抖动 / 丢包| RS[Robot Simulator]
+    RS -->|/robot/pose| MS
+    LE -->|/network/metrics| MS
+    MS -->|反馈 / 结果| BR
+    GUI -->|PROFILE 命令| BR
+    BR -->|SetNetworkProfile Service| LE
 ```
 
-## 当前交付状态
+### Windows上位机
 
-- [x] D0：需求、架构、通信契约、验收标准
-- [x] D1：单机器人通信闭环 MVP
-- [x] D2.1：控制命令序号与时间戳
-- [x] D2.2：滑动窗口交付率、实测延迟/抖动、AoI 与乱序统计
-- [x] D2.3：实测指标驱动的 GOOD/DEGRADED/STOPPED/ABORTED 状态机
-- [x] D2.4：显式 QoS 与控制端/机器人端部署定义（双容器运行待具备Docker的环境验收）
-- [x] D2.5：完成60次QoS重复实验、CSV/图表/报告自动化与GitHub CI配置
-- [ ] D3：多机器人调度、故障恢复与生命周期管理
-- [ ] D4：CI、Docker、性能报告、演示视频与作品集页面
+- 使用 C++17、WinSock 和 Win32/GDI，不要求在 Windows 安装 ROS 2；
+- 监听 Linux 机器人主动发起的 TCP 连接；
+- 下发目标坐标、查询状态、取消任务、切换网络档位；
+- 绘制机器人当前位置、目标点和历史轨迹；
+- 只显示关键事件，避免心跳和周期指标刷屏。
 
-详细路线见 [docs/DELIVERY_PLAN.md](docs/DELIVERY_PLAN.md)，第一周练习见 [docs/LEARNING_TASKS.md](docs/LEARNING_TASKS.md)，面试叙事见 [docs/PORTFOLIO_GUIDE.md](docs/PORTFOLIO_GUIDE.md)。
+### Linux机器人端
 
-## 环境建议
+- `linkguard_tcp_bridge`：把 TCP 命令转换为 ROS 2 Action和Service调用；
+- `mission_server`：管理任务生命周期、反馈、取消、超时和通信安全策略；
+- `link_emulator`：注入时延、抖动和应用层丢包，输出网络质量指标；
+- `robot_sim`：执行二维运动学仿真，并通过命令看门狗避免失联后继续运动；
+- `network_monitor`：用于调试和实验观察，可关闭周期日志。
 
-- Ubuntu 24.04
-- ROS 2 Jazzy
-- Python 3.12
+## 关键设计
 
-代码使用的 API 同样适用于较新的 ROS 2 发行版。若你使用 Humble（Ubuntu 22.04），建议先按当前版本尝试构建，再针对 Python API 的小差异调整。
+### 1. ROS 2通信机制分工
 
-## 构建
+| 机制 | 用途 | 选择原因 |
+|---|---|---|
+| Topic | 位姿、速度命令、网络指标 | 连续、异步数据流 |
+| Service | 切换网络配置 | 一次请求、一次确认 |
+| Parameter | 阈值和节点启动配置 | 低频配置数据 |
+| Action | 执行移动任务 | 支持反馈、取消和最终结果 |
 
-把整个目录放到工作空间的 `src` 下：
+### 2. TCP消息边界
+
+TCP是字节流，程序不能假设一次`send`对应一次`recv`。项目使用：
+
+```text
+4字节网络字节序长度 + UTF-8消息正文
+```
+
+发送端和接收端都实现完整收发循环；Windows端通过统一发送锁避免心跳、命令和任务反馈交叉写入同一字节流。
+
+### 3. 断线与任务语义
+
+- Linux每2秒主动尝试重连Windows；
+- TCP短暂断开不会自动取消正在执行的ROS 2任务；
+- 重连后可用`STATUS`查询当前任务；
+- 不自动重放未确认的`START`命令，避免任务被重复执行；
+- 持续通信中断会进入`STOPPED`，超过保护窗口后Action返回`ABORTED`。
+
+## TCP协议示例
+
+Windows发送：
+
+```text
+START|1001|5.0|2.0|0.10|30.0
+STATUS|1001
+STOP|1001
+PROFILE|congested
+QUIT
+```
+
+Linux返回：
+
+```text
+ACK|1001|ACCEPTED
+FEEDBACK|1001|42|3.117|0.950|DEGRADED|0.500|1.420|0.610
+RESULT|1001|SUCCEEDED|12.430|target reached
+ACK|1001|CANCEL_REQUESTED
+```
+
+协议和线程边界详见[`docs/TCP_ROS2_BRIDGE.md`](docs/TCP_ROS2_BRIDGE.md)。
+
+## 仓库组成
+
+该项目由两个配套工程组成：
+
+```text
+ros2_linkguard_project/             Linux ROS 2机器人端
+├── linkguard_interfaces/           自定义msg、srv和action
+├── linkguard_bringup/              仿真、链路模型、任务策略和实验工具
+├── linkguard_tcp_bridge/           C++ TCP/ROS 2桥接节点
+├── docs/                            协议、实验和项目说明
+└── tools/                           实验绘图脚本
+
+tcp_stream_lab/                     Windows C++上位机
+├── apps/tcp_server_gui_win.cpp      图形化上位机
+├── apps/tcp_server_win.cpp          控制台调试版本
+└── CMakeLists.txt
+```
+
+## 环境
+
+- Linux：Ubuntu 24.04、ROS 2 Jazzy、Python 3.12；
+- Windows：Windows 10/11、Visual Studio C++工具链、CMake；
+- 网络：Windows端开放TCP 19001，Linux能够访问Windows IPv4地址。
+
+## 构建ROS 2工程
+
+将`ros2_linkguard_project`放到工作空间的`src`目录：
 
 ```bash
 mkdir -p ~/linkguard_ws/src
-cp -r ros2_linkguard_project/* ~/linkguard_ws/src/
 cd ~/linkguard_ws
 source /opt/ros/jazzy/setup.bash
-rosdep install --from-paths src --ignore-src -r -y
 colcon build --symlink-install
 source install/setup.bash
 ```
 
-## 运行第一阶段 Demo
-
-终端 1：
+如果系统已经安装`rosdep`，可在构建前执行：
 
 ```bash
-ros2 launch linkguard_bringup demo.launch.py
+rosdep install --from-paths src --ignore-src -r -y
 ```
 
-终端 2：发送移动目标：
+## 构建Windows上位机
 
-```bash
-ros2 action send_goal /execute_mission linkguard_interfaces/action/ExecuteMission \
-  "{target_x: 5.0, target_y: 2.0, tolerance: 0.10, max_duration_sec: 30.0}" --feedback
+在Developer PowerShell for Visual Studio中执行：
+
+```powershell
+cd C:\Users\16862\cpp_learning\tcp_stream_lab
+cmake -S . -B build\windows -A x64
+cmake --build build\windows --config Debug --target tcp_server_gui_win
 ```
 
-也可以使用附带的测试客户端，并在 3 秒后主动取消：
+## 运行跨设备演示
 
-```bash
-ros2 run linkguard_bringup mission_client --x 5 --y 2 --cancel-after 3
+### 1. Windows启动图形上位机
+
+```powershell
+.\build\windows\Debug\tcp_server_gui_win.exe
 ```
 
-终端 3：任务进行中切换到拥塞网络：
+上位机监听`0.0.0.0:19001`。图形版和控制台版使用相同端口，不能同时运行。
+
+### 2. Linux启动ROS 2系统与桥接节点
 
 ```bash
-ros2 service call /set_network_profile linkguard_interfaces/srv/SetNetworkProfile \
-  "{profile: congested, latency_ms: 0.0, jitter_ms: 0.0, drop_rate: 0.0}"
+cd ~/linkguard_ws
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
+ros2 launch linkguard_tcp_bridge tcp_demo.launch.py \
+  server_ip:=10.29.213.237 server_port:=19001
 ```
 
-恢复良好网络：
+把示例IP替换为Windows当前可访问的IPv4地址。命令中不要输入`<`和`>`。
+
+### 3. 推荐演示顺序
+
+1. 在“正常”网络下启动任务，观察机器人到达目标；
+2. 新任务执行中切换到“拥塞”，观察速度比例下降并继续完成；
+3. 新任务执行中切换到“中断”，观察机器人停车并返回`ABORTED`；
+4. 恢复“正常”，再次启动任务，验证系统能够继续工作；
+5. 运行中点击“停止任务”，验证Action取消流程。
+
+## 正式实验
+
+定量实验在Linux单机环境运行，不需要启动Windows上位机。实验程序会自动启动和停止ROS 2节点，并记录每轮结果。
 
 ```bash
-ros2 service call /set_network_profile linkguard_interfaces/srv/SetNetworkProfile \
-  "{profile: good, latency_ms: 0.0, jitter_ms: 0.0, drop_rate: 0.0}"
-```
+cd ~/linkguard_ws
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
 
-自定义链路（`profile` 设为 `custom`）：
-
-```bash
-ros2 service call /set_network_profile linkguard_interfaces/srv/SetNetworkProfile \
-  "{profile: custom, latency_ms: 180.0, jitter_ms: 40.0, drop_rate: 0.25}"
-```
-
-运行时策略参数调整示例：
-
-```bash
-ros2 param set /mission_server degraded_delivery_rate 0.80
-ros2 param set /mission_server degraded_speed_scale 0.40
-ros2 param get /link_emulator drop_rate
-ros2 topic echo /network/metrics
-ros2 topic echo /communication/state
-```
-
-查看D2控制报文和实测通信指标：
-
-```bash
-ros2 interface show linkguard_interfaces/msg/CommandPacket
-ros2 interface show linkguard_interfaces/msg/CommandReceipt
-ros2 topic echo /cmd_vel_raw --once
-ros2 topic echo /cmd_vel --once
-ros2 topic echo /cmd_vel_receipt --once
-ros2 topic echo /network/metrics --once
-```
-
-`CommandPacket`中的`sequence`用于发现乱序，`stamp`用于测量实际延迟；机器人
-实际收到命令后通过`CommandReceipt`返回序号和接收时间。
-`/network/metrics`同时保留配置值，并发布最近50个已完成投递结果的交付率、
-实际延迟、实际抖动、AoI和乱序数量。仍在延迟队列中的命令不会被提前算作丢包。
-
-从D2.3开始，任务服务器不再根据配置的`drop_rate`直接判断安全状态，而是根据
-上述实测指标进入`GOOD`、`DEGRADED`、`STOPPED`或`ABORTED`。拥塞时降低线速度，
-危险链路下先停车，持续超过保护时限后再中止Action。
-
-D2.4将命令Topic的reliability和depth显式化，并提供双容器部署。详细验收命令见
-[docs/D2_3_D2_4_GUIDE.md](docs/D2_3_D2_4_GUIDE.md)。
-
-## QoS重复对照实验
-
-实验运行器自动完成`RELIABLE/BEST_EFFORT × good/congested/disconnected`，每次试验
-重新启动节点，并为两种QoS使用配对随机种子。不要同时手动启动`demo.launch.py`。
-
-先运行每组1次的冒烟实验：
-
-```bash
-cd ~/linkguard_ws/src/ros2_linkguard_project
-ros2 run linkguard_bringup qos_experiment \
-  --repetitions 1 \
-  --output experiments/results/qos_smoke.csv
-```
-
-正式执行每组10次：
-
-```bash
 ros2 run linkguard_bringup qos_experiment \
   --repetitions 10 \
-  --output experiments/results/qos_trials.csv
+  --profiles good congested disconnected \
+  --reliabilities reliable best_effort \
+  --qos-depth 10 \
+  --target-x 2.0 --target-y 1.0 \
+  --tolerance 0.10 --timeout 40 \
+  --base-seed 2000 \
+  --output experiments/results/formal_qos_trials.csv
 ```
 
-生成汇总CSV、SVG图表和Markdown报告：
-
-```bash
-ros2 run linkguard_bringup qos_analyze \
-  --input experiments/results/qos_trials.csv \
-  --output-dir experiments/results/report
-```
-
-完整实验设计和数据口径见
-[docs/QOS_EXPERIMENT_PROTOCOL.md](docs/QOS_EXPERIMENT_PROTOCOL.md)。
-
-正式实验已完成60次，六个组合均为10/10有效、0次基础设施错误、预期结果率100%。
-在本机低负载条件下，两种reliability没有观察到实质业务差异；任务行为主要由应用层
-网络profile决定。查看[最终项目报告](docs/FINAL_PROJECT_REPORT.md)和
-[QoS实验报告](experiments/results/report/QOS_EXPERIMENT_REPORT.md)。
-
-## 持续集成
-
-`.github/workflows/ci.yml`会在push和Pull Request时使用ROS 2 Jazzy环境执行依赖安装、
-Python语法检查、`colcon build`、`colcon test`和测试结果检查。仓库同时提供Apache-2.0
-许可证、变更日志、贡献指南和Pull Request模板。
-
-## 第一次演示建议
-
-1. 在 `good` 网络下发送 `(5, 2)` 目标，观察反馈和成功结果。
-2. 再发送同一目标，中途切为 `congested`，观察收敛变慢和 delivery rate 下降。
-3. 中途切为 `disconnected`，观察任务因链路质量不足而安全停车。
-4. 取消一个正在执行的目标，证明 Action 的取消语义有效。
-
-## 仓库结构
+本次正式数据共60轮：
 
 ```text
-ros2_linkguard_project/
-├── linkguard_interfaces/     # CommandPacket、NetworkMetrics、srv、action
-├── linkguard_bringup/        # Python 节点、launch、参数和单元测试
-├── experiments/              # 原始CSV、汇总、图表和报告
-├── .github/workflows/        # GitHub Actions持续集成
-├── docker/                   # 容器镜像入口
-├── docker-compose.yml        # 控制端与机器人端双容器编排
-└── docs/                     # 架构、交付计划、验收与面试说明
+3种网络档位 × 2种QoS策略 × 10次重复 = 60轮
 ```
 
-## 你应该亲自完成的部分
+相同网络档位和重复编号使用相同随机种子，使Reliable与Best Effort能够配对比较。
 
-作品集的价值不只是能运行，还在于能解释实验设计、指标口径和结论边界。正式报告应保留原始CSV，区分DDS传输缺口与应用层模拟丢包，不要仅用一次截图宣称QoS优劣。
+## 绘制三张项目图
+
+绘图脚本只使用Python标准库，不需要安装Matplotlib：
+
+```bash
+python3 tools/plot_formal_results.py \
+  experiments/results/formal_qos_trials.csv \
+  docs/images
+```
+
+输出：
+
+```text
+docs/images/mission_duration.svg       任务耗时分布与异常轮次
+docs/images/network_quality.svg        交付率、延迟和AoI
+docs/images/qos_paired_difference.svg  Reliable与Best Effort配对差值
+```
+
+三张图分别回答：
+
+1. 网络恶化是否让任务执行变慢或中止？
+2. 三种网络档位的实测质量差异有多大？
+3. 在控制随机种子后，两种QoS策略是否仍有稳定差异？
+
+## 实验结论与边界
+
+- 良好和拥塞环境下40轮任务全部完成；
+- 拥塞时平均交付率约73.3%，平均延迟约174 ms，任务中位耗时增加约66%；
+- 中断环境下20轮任务全部按策略中止，未继续盲目运动；
+- Reliable与Best Effort没有显示出稳定且具有工程意义的差异；
+- 应用层`link_emulator`主动丢弃的消息无法由DDS Reliable恢复，因此本实验主要验证LinkGuard的自适应策略，不能替代真实网络中的DDS QoS基准测试；
+- 中断场景没有成功交付的数据包，延迟、抖动和AoI应解释为“无有效样本”，而不是0 ms。
+
+## 测试
+
+```bash
+cd ~/linkguard_ws
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
+colcon test --packages-select linkguard_bringup
+colcon test-result --verbose
+```
+
+测试覆盖序号跟踪、链路模型、交付指标、通信策略和实验分析。
+
+## 已知限制
+
+- 机器人使用二维运动学仿真，没有真实底盘、传感器噪声和路径规划；
+- 网络损伤是应用层模拟，不等同于真实Wi-Fi、5G或受限带宽链路；
+- 当前是单机器人、单任务模型；
+- Windows GUI用于工程演示，正式量化结果来自Linux自动实验；
+- 若要严格比较DDS QoS，需要跨主机或使用`tc netem`构造真实传输层拥塞。
+
+## 项目状态
+
+当前版本已经完成跨平台通信、ROS 2任务闭环、弱网自适应策略、图形化演示和60轮正式实验。后续工作以文档、演示视频和求职展示为主，不再继续扩大功能范围。
+
+## License
+
+Apache-2.0

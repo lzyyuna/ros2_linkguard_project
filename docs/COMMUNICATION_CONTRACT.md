@@ -4,31 +4,12 @@
 
 | 名称 | 类型 | 发布者 | 订阅者 | 频率 | 语义 |
 |---|---|---|---|---|---|
-| `/cmd_vel_raw` | `CommandPacket` | mission_server | link_emulator | 10 Hz | 带发送时间和序号的原始控制指令 |
-| `/cmd_vel` | `CommandPacket` | link_emulator | robot_sim | 不固定 | 经过丢包和延迟后的控制报文 |
-| `/cmd_vel_receipt` | `CommandReceipt` | robot_sim | link_emulator | 每个已接收命令一次 | 机器人接收确认和接收时间 |
+| `/cmd_vel_raw` | `geometry_msgs/Twist` | mission_server | link_emulator | 10 Hz | 未经过网络的控制指令 |
+| `/cmd_vel` | `geometry_msgs/Twist` | link_emulator | robot_sim | 不固定 | 经过丢包和延迟后的控制指令 |
 | `/robot/pose` | `geometry_msgs/Pose2D` | robot_sim | mission_server | 20 Hz | 机器人二维位姿 |
-| `/network/metrics` | `NetworkMetrics` | link_emulator | mission_server/monitor | 2 Hz | 链路配置、累计计数和滑动窗口实测指标 |
-| `/communication/state` | `CommunicationState` | mission_server | network_monitor/运维端 | 状态变化时 | 通信安全状态、限速比例和判定原因 |
+| `/network/metrics` | `NetworkMetrics` | link_emulator | mission_server/monitor | 2 Hz | 链路配置和累计投递指标 |
 
-`CommandPacket.sequence`单调递增，用于发现丢失与乱序；`stamp`记录控制命令的
-源端发送时间。robot_sim实际收到报文后发布`CommandReceipt`，链路模拟器使用
-回执中的源时间和接收时间计算端到端延迟，避免把“已经publish”误认为“机器人
-已经收到”。
-
-实测指标使用最近`metrics_window_size`个已经完成的结果，默认窗口为50。
-已丢弃和已投递报文进入窗口，仍在延迟队列中的报文暂不进入窗口，避免把延迟
-误判为丢包。`age_of_information_ms`表示最新已投递源数据距当前时刻的年龄。
-
-显式QoS约定：
-
-- `/cmd_vel_raw`和`/cmd_vel`：KEEP_LAST，depth默认10，reliability可在启动时选择`reliable`或`best_effort`；
-- `/robot/pose`：BEST_EFFORT、VOLATILE，允许新位姿替代旧位姿；
-- `/cmd_vel_receipt`和`/network/metrics`：RELIABLE、VOLATILE；
-- `/communication/state`：RELIABLE、TRANSIENT_LOCAL、depth 1，新订阅者可立即得到最近状态。
-
-QoS在publisher/subscription创建时确定，`command_qos_reliability`与
-`command_qos_depth`运行时不可修改，变更后需要重启相关节点。
+第一阶段全部使用默认 QoS，避免一次引入过多概念。D2 再系统比较 QoS。
 
 ## Service
 
@@ -45,10 +26,9 @@ QoS在publisher/subscription创建时确定，`command_qos_reliability`与
 
 关键参数：
 
-- link_emulator：`latency_ms`、`jitter_ms`、`drop_rate`、`random_seed`、`metrics_window_size`；
+- link_emulator：`latency_ms`、`jitter_ms`、`drop_rate`、`random_seed`；
 - robot_sim：`update_rate_hz`、`command_timeout_sec`、`max_linear_speed`；
-- mission_server：`control_rate_hz`、`linear_gain`、`max_linear_speed`、状态机阈值、`bad_link_abort_sec`；
-- 三个命令链路节点：`command_qos_reliability`、`command_qos_depth`（仅启动时生效）。
+- mission_server：`control_rate_hz`、`linear_gain`、`max_linear_speed`、`stop_quality_threshold`、`bad_link_abort_sec`。
 
 Parameter 表示节点配置，Service 表示明确的业务操作。“切换网络场景”用 Service；“微调阈值”用 Parameter。
 
@@ -57,7 +37,7 @@ Parameter 表示节点配置，Service 表示明确的业务操作。“切换�
 `/execute_mission` 使用 `ExecuteMission.action`。
 
 - Goal：目标点、容差、最长执行时间；
-- Feedback：当前位姿、剩余距离、实测交付率、通信状态、速度缩放比例；
+- Feedback：当前位姿、剩余距离、网络质量；
 - Result：成功与否、原因、耗时；
 - Cancel：立即发零速度并返回 canceled。
 
@@ -66,32 +46,23 @@ Parameter 表示节点配置，Service 表示明确的业务操作。“切换�
 ## 安全规则
 
 1. 命令超过 `command_timeout_sec` 未更新，robot_sim 自动停车；
-2. 实测通信指标触发STOPPED时立即输出零速度，持续 `bad_link_abort_sec` 后Action中止；
+2. 链路质量低于阈值持续 `bad_link_abort_sec`，mission_server 中止；
 3. Action 成功、取消、超时或异常时都必须发布零速度；
 4. 所有运行期参数更新先校验再提交。
 
-## D2测量口径
+## 外部 TCP 网关
 
-- `latency_ms`、`jitter_ms`、`drop_rate`：Service或Parameter设置的仿真配置；
-- `measured_latency_ms`：窗口内已投递报文的实际平均延迟；
-- `measured_jitter_ms`：窗口内已投递报文延迟的总体标准差；
-- `measured_delivery_rate`：窗口内已投递数量除以已完成结果数量；
-- `age_of_information_ms`：当前时间减去最新已投递报文的源时间戳；
-- `out_of_order_packets`：序号不大于历史最高已投递序号的累计次数；
-- `transport_dropped_packets`：通过mission_server到link_emulator之间的序号缺口推断的DDS入口丢失；
-- `dropped_packets`：link_emulator按应用层`drop_rate`主动丢弃的数量；
-- `window_sample_count`：当前窗口内已完成结果的数量。
+`linkguard_tcp_bridge` 是 Windows 上位机与 ROS 2 图之间的边界适配器。它沿用
+`tcp_stream_lab` 的 4 字节大端长度前缀协议，但不复制机器人业务状态机：任务状态的
+唯一事实来源仍是 `/execute_mission` Action。
 
-当link_emulator发现`/cmd_vel_raw`序号跳跃时，会把缺失序号作为传输丢失加入交付率
-窗口。这样QoS实验不会只统计已经到达模拟器的报文。该推断假设单一发布者的序号
-严格递增；重复或倒退的原始命令会被拒绝，避免旧控制覆盖新控制。
+- `START|task|x|y|tolerance|max_duration`：发送 Action goal；
+- `STATUS[|task]`：读取桥接节点保存的最新 Action 状态；
+- `STOP|task`：调用 Action cancel；
+- `PING|sequence`：网络线程直接回复 `PONG|sequence`，不经过 ROS 2；
+- 所有外发帧经过同一个 TCP 写线程；
+- TCP 断线只停止遥测转发，不自动取消正在执行的任务。
+- Action Feedback 中的 `communication_state` 和 `speed_scale` 会原样转发到上位机，
+  用于区分正常、降速和安全停车状态。
 
-## D2.3状态策略
-
-- `GOOD`：指标健康，线速度比例1.0；
-- `DEGRADED`：交付率、延迟或抖动达到预警阈值，按`degraded_speed_scale`限速；
-- `STOPPED`：交付率、延迟、AoI或指标超时达到危险条件，发布零速度；
-- `ABORTED`：STOPPED连续超过`bad_link_abort_sec`，中止当前Action。
-
-每个任务开始时有`metrics_warmup_sec`预热期，用新任务产生的控制回执刷新指标，
-防止空闲阶段累积的高AoI导致任务刚开始就停车。
+详细字段和联调步骤见 [TCP_ROS2_BRIDGE.md](TCP_ROS2_BRIDGE.md)。

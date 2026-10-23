@@ -23,7 +23,7 @@ class NetworkMonitor(Node):
         )
 
     def _on_metrics(self, message: NetworkMetrics) -> None:
-        self.get_logger().info(
+        self.get_logger().debug(
             f'profile={message.profile:<12} '
             f'configured=({message.latency_ms:.1f}ms, {message.jitter_ms:.1f}ms, '
             f'drop={message.drop_rate:.2f}) '
